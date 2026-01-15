@@ -1,0 +1,31 @@
+# segma specific files and folders
+/data/
+logs/
+wandb/
+notebooks/
+import
+/models/
+/experiments/
+whisper_*_encoder/
+wavlm_*_model/
+*.tar.gz
+scripts/jz
+scripts/extra/*.tsv
+
+# extra
+.vscode
+.cache
+.benchmarks
+
+/wavlm_base_model/
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.venv*

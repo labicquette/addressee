@@ -1,0 +1,57 @@
+wandb:
+  offline: false
+  project:  addressee
+  name: train
+
+data:
+
+  dataset_path: /store/scratch/tcharlot/data/addressee
+  classes: binary_classes
+
+# necessary info for pred/eval
+audio:
+  #chunk_duration_s: 0.575
+  chunk_duration_s: 4
+  sample_rate: 16_000
+  # True if pyannet, False if Whisper
+  strict_frames: false
+
+
+model_type: hubert
+#model_id: hubert_base
+#model_id : /store/scratch/tcharlot/checkpoints/250722-114435-spare-doree/checkpoints/epoch=32-val_loss=0.580.ckpt
+#model_id : /scratch2/tcharlot/models/hubert_iter2_B175/checkpoints_longforms_hubert_pretrain_base/epoch=45-step=400000.ckpt
+model_id: /store/scratch/tcharlot/models/exp_iter3_B175/checkpoints_longforms_hubert_pretrain_base/epoch=44-step=400000.ckpt
+#model_id : hubert_large
+#model_id : /store/scratch/tcharlot/models/exp_iter2_B175_2M/checkpoints_longforms_hubert_pretrain_base/epoch=57-step=515522.ckpt
+freeze_encoder : false
+reduction: weighted
+
+train:
+#  lr: 0.000142
+  lr: 0.00001
+  batch_size: 16
+  max_epochs: 10
+  classifier: 256
+
+  # validation_metric: auroc
+  validation_metric: loss
+  # [loss, partial_loss, label_loss, f1_score, auroc, roc]
+  # [loss (includes label_loss), f1_score]
+  extra_val_metrics: [loss, f1_score]
+  # simple or advanced (python <= 3.11)
+  profiler: null
+
+  dataloader:
+    num_workers: 8
+
+  scheduler:
+    patience: 3
+
+  optim:
+    scheduler: tristage
+    init_lr_scale: 0.01
+    final_lr_scale: 0.05
+    warmup_steps: 5000
+    hold_steps: 12500
+    decay_steps: 7500
