@@ -98,17 +98,19 @@ class HubertFinetune(pl.LightningModule):
             #print(hidden_states.shape)
             layer_weights = self.layer_weights[:, None, None, None]
             x = torch.sum(layer_weights * hidden_states, dim=0)
+        else:
+            x = hidden_states[-1]
 
-            if hasattr(self.config, "pool"):
-                #print(x.shape)
-                #x = x[mask[0]:mask[1]].mean(dim=1)  # (B, H)
-                x = (x * mask).sum(dim=1) / mask.sum(dim=1)
-            # careful if not pooled, whole sequence of frames
-            else:
-                raise NotImplementedError(
-                    f"Transformer layer for dynamic frame sequence is not implemented"
-                )
-                #here transformers logic
+        if hasattr(self.config, "pool"):
+            #print(x.shape)
+            #x = x[mask[0]:mask[1]].mean(dim=1)  # (B, H)
+            x = (x * mask).sum(dim=1) / mask.sum(dim=1)
+        # careful if not pooled, whole sequence of frames
+        else:
+            raise NotImplementedError(
+                f"Transformer layer for dynamic frame sequence is not implemented"
+            )
+            #here transformers logic
 
         # here x should be a single 768 representation
         x = self.dropout(x)
@@ -121,6 +123,9 @@ class HubertFinetune(pl.LightningModule):
 
         with torch.amp.autocast("cuda", enabled=True):
             x, y_target, mask = batch
+
+            if self.config.padding: 
+
             # x = batch["x"]
             # y_target = batch["y"]
             y_preds = self.forward(x, mask=mask)
