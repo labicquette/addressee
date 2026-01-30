@@ -17,13 +17,16 @@ audio:
   strict_frames: false
 
 
-model_type: hubert
-#model_id: hubert_base
-#model_id : /store/scratch/tcharlot/checkpoints/250722-114435-spare-doree/checkpoints/epoch=32-val_loss=0.580.ckpt
-#model_id : /scratch2/tcharlot/models/hubert_iter2_B175/checkpoints_longforms_hubert_pretrain_base/epoch=45-step=400000.ckpt
-model_id: /store/scratch/tcharlot/models/exp_iter3_B175/checkpoints_longforms_hubert_pretrain_base/epoch=44-step=400000.ckpt
-#model_id : hubert_large
-#model_id : /store/scratch/tcharlot/models/exp_iter2_B175_2M/checkpoints_longforms_hubert_pretrain_base/epoch=57-step=515522.ckpt
+model_type: wav2vec
+model_id: wav2vec2_base
+# model_id: wavlm_base_plus
+# model_id: wavlm_base
+# model_id: wav2vec2_base
+# model_id: wav2vec2_xlsr
+
+
+
+
 freeze_encoder : false
 reduction: false
 plots: false

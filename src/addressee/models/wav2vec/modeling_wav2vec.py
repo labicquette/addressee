@@ -13,7 +13,7 @@ from addressee.data.dataloaders import binary_classes,ternary_classes
 import math
 
 from typing import Literal, Optional, Tuple, Iterable
-from .utils import load_hubert
+from .utils import load_wav2vec
 
 
 run_id2model_id = {
@@ -42,7 +42,7 @@ def segment_mean(self, x, start, end):
     return out
 
 
-class HubertFinetune(pl.LightningModule):
+class Wav2VecFinetune(pl.LightningModule):
     def __init__(
         self,
         config,
@@ -52,12 +52,15 @@ class HubertFinetune(pl.LightningModule):
         self.config = config
         self.label_encoder = binary_classes
         if train:
-            self.wav2vec2 = load_hubert(self.config.model_id)
+            self.wav2vec2 = load_wav2vec(self.config.model_id)
         # else:
         #     from torchaudio.models import hubert_pretrain_base
 
         #     model = hubert_pretrain_base(num_classes=500)
         #     self.wav2vec2 = model.wav2vec2
+        self.padding_attention_mask = self.config.train.mask_padding_attention
+        if "wavlm" in self.config.model_id:
+            self.padding_attention_mask = False
 
         if self.config.model_id == "hubert_large" :
             feature_size = 1024
@@ -108,7 +111,7 @@ class HubertFinetune(pl.LightningModule):
 
     def forward(self, x: torch.Tensor, lengths, start_mask, end_mask):
         x = x.squeeze(1)
-        if not self.config.train.mask_padding_attention: 
+        if not self.padding_attention_mask:
             lengths = None
         with torch.no_grad():
             x, lengths = self.wav2vec2.feature_extractor(x, lengths)
@@ -160,12 +163,7 @@ class HubertFinetune(pl.LightningModule):
                 t = torch.arange(x.size(1), device=x.device).unsqueeze(0)
                 mask = (t >= start_mask[:, None]) & (t < end_mask[:, None])
                 mask = mask.float().unsqueeze(-1)
-                mask_sum = mask.sum(dim=1)
-                if mask_sum == 0:
-                    x = x.mean(dim=1)
-                else:
-                    x = (x * mask).sum(dim=1) / ( + 1e-6)
-
+                x = (x * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
 
 
             # if self.context_size > 0:
@@ -443,18 +441,6 @@ class HubertFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
-
-
-
-
-
-    def predict_step(self, batch):
-
-        return predictions
-
-
-
-
 
     def on_test_epoch_end(self):
         if self.config.plots:

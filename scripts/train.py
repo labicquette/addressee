@@ -119,20 +119,9 @@ if __name__ == "__main__":
 
     get_parameter_table(model)
 
-    print(
-        f"[log @ {datetime.now().strftime('%Y%m%d_%H:%M:%S')}] - SegmentationDataLoader initializing ...",
-        flush=True,
-    )
-
-
     dm = AddresseeDataloader(dataset = "addressee",
                              dataset_path= config.data.dataset_path,
                              config= config)
-    
-    print(
-        f"[log @ {datetime.now().strftime('%Y%m%d_%H:%M:%S')}] - SegmentationDataLoader initialized",
-        flush=True,
-    )
 
     print("[log] - use WandbLogger")
     logger = WandbLogger(
@@ -183,17 +172,28 @@ if __name__ == "__main__":
         # profiler="advanced"
         profiler=config.train.profiler,
     )
-    model = torch.compile(model)
+    #model = torch.compile(model)
 
-    print(f"[log @ {datetime.now().strftime('%Y%m%d_%H%M')}] - started training")
+    
+    trainer.validate(model=model, datamodule=dm)
+
+    print(f"[log @ {datetime.now().strftime('%Y%m%d_%H%M')}] - Started training")
     if args.auto_resume and last_ckpt.exists():
         print("[log] - fit with resuming")
         trainer.fit(model, datamodule=dm, ckpt_path=last_ckpt)
     else:
         trainer.fit(model, datamodule=dm)
 
-    # NOTE - symlink to best model and to static best model (models/last/best.ckpt)
-    (chkp_path / "best.ckpt").symlink_to(
+    print(f"[log @ {datetime.now().strftime('%Y%m%d_%H%M')}] - Finished training")
+
+    # # NOTE - symlink to best model and to static best model (models/last/best.ckpt)
+    best_link = chkp_path / "best.ckpt"
+
+    # if infer only heldout and test add comment until test
+    if best_link.exists() or best_link.is_symlink():
+        best_link.unlink()
+
+    best_link.symlink_to(
         Path(model_checkpoint.best_model_path).absolute()
     )
     static_p = experiment_path / "last"
@@ -207,7 +207,7 @@ if __name__ == "__main__":
 
 
     print("It's time to test : ")
-    results = trainer.test(model, datamodule=dm, ckpt_path="best")
+    results = trainer.test(model, datamodule=dm, ckpt_path=best_link)
 
 
 

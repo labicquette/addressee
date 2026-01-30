@@ -1,2 +1,4 @@
 pool : true
-padding : true
+train:
+  pad : true
+  mask_padding_attention: true 

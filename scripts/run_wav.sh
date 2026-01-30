@@ -24,13 +24,12 @@ export NCCL_DEBUG=INFO
 export TORCHDYNAMO_VERBOSE=1
 
 context_size=0
-run_id="bbh1withcontext"$context_size"Sseed"$SLURM_ARRAY_TASK_ID
-model_type="hubert"
-#model_id="hubert_base"
-#model_id="hubert_large"
-#model_id="/store/scratch/tcharlot/models/exp_iter3_B175/checkpoints_longforms_hubert_pretrain_base/epoch=44-step=400000.ckpt"
-model_id="/scratch2/tcharlot/models/hubert_iter2_B175/checkpoints_longforms_hubert_pretrain_base/epoch=45-step=400000.ckpt"
-
+run_id="wavlmbasepluswithcontext"$context_size"Sseed"$SLURM_ARRAY_TASK_ID
+model_type="wav2vec"
+#model_id="wav2vec2_base"
+model_id="wavlm_base_plus"
+#model_id="wavlm_base"
+#model_id="wav2vec2_xlsr"
 
 exp_config="pooling.yml"
 user_path="/scratch2/tcharlot/addressee"

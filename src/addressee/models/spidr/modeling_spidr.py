@@ -160,12 +160,7 @@ class HubertFinetune(pl.LightningModule):
                 t = torch.arange(x.size(1), device=x.device).unsqueeze(0)
                 mask = (t >= start_mask[:, None]) & (t < end_mask[:, None])
                 mask = mask.float().unsqueeze(-1)
-                mask_sum = mask.sum(dim=1)
-                if mask_sum == 0:
-                    x = x.mean(dim=1)
-                else:
-                    x = (x * mask).sum(dim=1) / ( + 1e-6)
-
+                x = (x * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
 
 
             # if self.context_size > 0:
@@ -443,18 +438,6 @@ class HubertFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
-
-
-
-
-
-    def predict_step(self, batch):
-
-        return predictions
-
-
-
-
 
     def on_test_epoch_end(self):
         if self.config.plots:
