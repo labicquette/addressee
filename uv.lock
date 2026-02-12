@@ -9,7 +9,7 @@ resolution-markers = [
 [[package]]
 name = "addressee"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "lightning" },
     { name = "pandas" },
@@ -32,6 +32,9 @@ requires-dist = [
     { name = "torchaudio", specifier = "==2.8.0" },
     { name = "wandb", specifier = ">=0.23.1" },
 ]
+
+[package.metadata.requires-dev]
+dev = []
 
 [[package]]
 name = "aiohappyeyeballs"
