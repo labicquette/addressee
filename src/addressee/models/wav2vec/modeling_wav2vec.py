@@ -72,8 +72,8 @@ class Wav2VecFinetune(pl.LightningModule):
             p.requires_grad = False
 
         # NOTE - freeze transformer encoder, opt.
-        if self.config.encoder.freeze_encoder:
-            for p in self.wav2vec2.parameters():
+        if self.config.freeze_encoder:
+            for p in self.wav2vec2.encoder.parameters():
                 p.requires_grad = False
             
         # reduction mechanism - learnable or non-learnable weights
