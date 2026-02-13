@@ -18,13 +18,10 @@ audio:
 
 
 model_type: wav2vec
+# One of (wav2vec2_base, wav2vec2_large, wav2vec2_xlsr_300m)
 model_id: wav2vec2_base
-# model_id: wavlm_base_plus
-# model_id: wavlm_base
-# model_id: wav2vec2_base
-# model_id: wav2vec2_xlsr
-
-
+# Path to a checkpoint (for w2v2_ll4300) or null (resolves to None)
+model_checkpoint: null
 
 
 freeze_encoder : false
