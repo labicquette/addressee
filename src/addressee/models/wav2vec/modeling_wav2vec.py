@@ -13,7 +13,7 @@ from addressee.data.dataloaders import binary_classes,ternary_classes
 import math
 
 from typing import Literal, Optional, Tuple, Iterable
-from .utils import load_wav2vec
+from .utils import load_wav2vec2_model
 
 
 run_id2model_id = {
@@ -52,12 +52,9 @@ class Wav2VecFinetune(pl.LightningModule):
         self.config = config
         self.label_encoder = binary_classes
         if train:
-            self.wav2vec2 = load_wav2vec(self.config.model_id)
-        # else:
-        #     from torchaudio.models import hubert_pretrain_base
+            self.wav2vec2 = load_wav2vec2_model(self.config.model_id, self.config.model_checkpoint)
+            self.wav2vec2.train()
 
-        #     model = hubert_pretrain_base(num_classes=500)
-        #     self.wav2vec2 = model.wav2vec2
         self.padding_attention_mask = self.config.train.mask_padding_attention
         if "wavlm" in self.config.model_id:
             self.padding_attention_mask = False
@@ -73,7 +70,7 @@ class Wav2VecFinetune(pl.LightningModule):
 
         # NOTE - freeze transformer encoder, opt.
         if self.config.freeze_encoder:
-            for p in self.wav2vec2.parameters():
+            for p in self.wav2vec2.encoder.parameters():
                 p.requires_grad = False
             
         # reduction mechanism - learnable or non-learnable weights
@@ -480,23 +477,6 @@ class Wav2VecFinetune(pl.LightningModule):
              "monitor": monitor,
              },
         )
-    
-
-    def state_dict(self, *args, **kwargs):
-        """Custom state_dict that excludes the whisper encoder."""
-        state_dict = super().state_dict(*args, **kwargs)
-        # Remove all entries starting with 'w_encoder.'
-        keys_to_remove = [k for k in state_dict.keys() if k.startswith("encoder.")]
-        for k in keys_to_remove:
-            del state_dict[k]
-        return state_dict
-
-    def load_state_dict(
-        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
-    ):
-        """Custom load_state_dict that doesn't require whisper encoder weights."""
-        return super().load_state_dict(state_dict, strict=False, assign=assign)
-    
 
 
 

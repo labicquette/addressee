@@ -15,3 +15,12 @@ dependencies = [
     "torchaudio==2.8.0",
     "wandb>=0.23.1",
 ]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.0",
+]

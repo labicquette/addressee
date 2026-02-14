@@ -1,58 +1,39 @@
 from pathlib import Path
+from typing import Literal, Any
 
 import torch
 import torchaudio
-from torch.nn import Module
-from torchaudio.models import hubert_pretrain_base
+from torchaudio.models.wav2vec2 import wav2vec2_base
 
 
-def load_wav2vec(path: Path | str):
-    path = Path(path)
+# https://docs.pytorch.org/audio/stable/generated/torchaudio.models.Wav2Vec2Model.html#torchaudio.models.Wav2Vec2Model
+W2V2_MODELS = [
+    "wav2vec2_base",
+    "wav2vec2_large",
+    "wav2vec2_xlsr53",
+    "wav2vec2_ll4300",
+]
 
-    print("loading : ",path)
-    model = hubert_pretrain_base(num_classes=500)
-    if path.exists():
-        print("loaded custom path", path)
-        model = _load_state(model, path)
-
-    else:
-        if str(path) == "wavlm_base_plus":
-            print("loading wavlm_base_plus")
-            bundle = torchaudio.pipelines.WAVLM_BASE_PLUS
-
-        if str(path) == "wavlm_base":
-            print("loading wavlm_base")
-            bundle = torchaudio.pipelines.WAVLM_BASE
-
-        if str(path) == "wav2vec2_base":
-            print("loading wav2vec2_base")
-            bundle = torchaudio.pipelines.WAV2VEC2_BASE
-        
-        if str(path) == "wav2vec2_xlsr":
-            print("loading wav2vec2_xlsr")
-            bundle = torchaudio.pipelines.WAV2VEC2_XLSR53
-
-        wav2vec2 = bundle.get_model()
-        wav2vec2.train()
-
-    return wav2vec2
-
-
-def _load_state(model: Module, checkpoint_path: Path, device="cpu") -> Module:
-    """Load weights from HuBERTPretrainModel checkpoint into hubert_pretrain_base model.
-    Args:
-        model (Module): The hubert_pretrain_base model.
-        checkpoint_path (Path): The model checkpoint.
-        device (torch.device, optional): The device of the model. (Default: ``torch.device("cpu")``)
-
-    Returns:
-        (Module): The pretrained model.
-    """
-    state_dict = torch.load(checkpoint_path, map_location=device)
-    state_dict = {
-        k.replace("model.", ""): v for k, v in state_dict["state_dict"].items()
-    }
-    model.load_state_dict(state_dict)
-    return model
-
-
+def load_wav2vec2_model(
+    model_id: Literal[
+        "wav2vec2_base", "wav2vec2_large", "wav2vec2_xlsr53", "wav2vec2_ll4300"
+    ],
+    model_checkpoint: Path | None = None,
+) -> Any:
+    """Load a pre-trained wav2vec 2.0 model"""
+    match model_id:
+        case "wav2vec2_base":
+            return torchaudio.pipelines.WAV2VEC2_BASE.get_model()
+        case "wav2vec2_large":
+            return torchaudio.pipelines.WAV2VEC2_LARGE.get_model()
+        case "wav2vec2_xlsr53":
+            return torchaudio.pipelines.WAV2VEC2_XLSR53.get_model()
+        case "wav2vec2_ll4300":
+            assert model_checkpoint is not None
+            model = wav2vec2_base()
+            model.load_state_dict(torch.load(model_checkpoint, map_location="cpu"))
+            return model
+        case _:
+            raise ValueError(
+                f"The `model_id` value is invalid, please select one of: {W2V2_MODELS}."
+            )
