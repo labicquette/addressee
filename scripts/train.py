@@ -178,7 +178,7 @@ if __name__ == "__main__":
             model_checkpoint,
             early_stopping,
             LearningRateMonitor(),
-            TQDMProgressBar(1000 if "debug" not in config.data.dataset_path else 1),
+            TQDMProgressBar(500 if "debug" not in config.data.dataset_path else 1),
         ],
         # profiler="advanced"
         profiler=config.train.profiler,

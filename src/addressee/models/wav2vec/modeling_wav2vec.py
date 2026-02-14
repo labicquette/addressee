@@ -24,24 +24,6 @@ run_id2model_id = {
 }
 
 
-def segment_mean(self, x, start, end):
-    """
-    x: (B, T, D)
-    start, end: (B,)
-    """
-    B, T, D = x.shape
-
-    start = start.clamp(0, T - 1)
-    end = end.clamp(start + 1, T)
-
-    out = torch.zeros(B, D, device=x.device, dtype=x.dtype)
-
-    for i in range(B):
-        out[i] = x[i, start[i]:end[i]].mean(dim=0)
-
-    return out
-
-
 class Wav2VecFinetune(pl.LightningModule):
     def __init__(
         self,
@@ -59,10 +41,16 @@ class Wav2VecFinetune(pl.LightningModule):
         if "wavlm" in self.config.model_id:
             self.padding_attention_mask = False
 
-        if self.config.model_id == "hubert_large" :
+        if self.config.model_id == "hubert_large":
             feature_size = 1024
         else:
             feature_size = 768
+
+        if "xlsr" in self.config.model_id:
+            self.xlsr = True
+            feature_size = 1024
+        else: 
+            self.xlsr = False
 
         # NOTE - freeze CNN encoder
         for p in self.wav2vec2.feature_extractor.parameters():
@@ -75,7 +63,6 @@ class Wav2VecFinetune(pl.LightningModule):
             
         # reduction mechanism - learnable or non-learnable weights
         if self.config.reduction == "weighted":
-
             self.enc_layers_to_use = list(
                 range(len(self.wav2vec2.encoder.transformer.layers))
             )
@@ -106,12 +93,17 @@ class Wav2VecFinetune(pl.LightningModule):
         self.targets = {"test":[],"heldout":[]}
         self.context_size = int(self.config.context_size)
 
-    def forward(self, x: torch.Tensor, lengths, start_mask, end_mask):
+    def forward(self, x: torch.Tensor, lengths, mask):
         x = x.squeeze(1)
         if not self.padding_attention_mask:
             lengths = None
+        # xlsr needs an extra layer norm
+        if self.xlsr:
+            x = nn.functional.layer_norm(x, x.shape)
+               
         with torch.no_grad():
             x, lengths = self.wav2vec2.feature_extractor(x, lengths)
+        
         if self.config.freeze_encoder:
             with torch.no_grad():
                 hidden_states = self.wav2vec2.encoder.extract_features(
@@ -121,6 +113,9 @@ class Wav2VecFinetune(pl.LightningModule):
             hidden_states = self.wav2vec2.encoder.extract_features(
                 x, lengths, num_layers=None
             )
+        
+
+            
         if self.config.reduction:
             # hidden_states = torch.stack(hidden_states, dim=0)
             # weights = self.layer_weights.view(-1, 1, 1, 1)
@@ -134,43 +129,11 @@ class Wav2VecFinetune(pl.LightningModule):
             x = hidden_states[-1]
 
         if hasattr(self.config, "pool"):
-            # if we are padding we are receiving lengthts not a mask
-            # if self.config.train.pad:
-            #     B, T_hubert, D = x.shape
-            #     t = torch.arange(T_hubert, device=x.device).unsqueeze(0)
-            #     mask = (t < mask.unsqueeze(1)).float().unsqueeze(-1) 
-            #print(x.shape, mask.shape)
-
-            # if self.context_size > 0:
-            #     B, T, D = x.shape
-            #     t = torch.arange(T, device=x.device).unsqueeze(0)  # (1, T)
-            #     mask = (t >= start_mask.unsqueeze(1)) & (t < end_mask.unsqueeze(1))
-            #     mask = mask.unsqueeze(-1).float() 
-            #     denom = mask.sum(dim=1).clamp(min=1.0)
-            #     x = (x * mask).sum(dim=1) / denom
-            # else: 
-            #     x = x.mean(dim=1)
-
-
-            #print("Forward shape : ", x.shape, start_mask, end_mask)
-
             if self.context_size == 0:
                 x = x.mean(dim=1)
             else:
-                t = torch.arange(x.size(1), device=x.device).unsqueeze(0)
-                mask = (t >= start_mask[:, None]) & (t < end_mask[:, None])
-                mask = mask.float().unsqueeze(-1)
-                x = (x * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
-
-
-            # if self.context_size > 0:
-            #     x = self.segment_mean(x, start_mask, end_mask)
-            #     mask = torch.ones(x.size(1), device=x.device).unsqueeze(0)
-            #     mask[:start_mask] = 0
-            #     mask[end_mask:] = 0
-            #     x = (x * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
-            # else:
-            #x = x[:,1, :]#].mean(dim=1)
+                mask_sum =  mask.sum(dim=1)
+                x = (x * mask).sum(dim=1) / mask_sum
 
 
         else:
@@ -188,25 +151,21 @@ class Wav2VecFinetune(pl.LightningModule):
         opt = self.optimizers()
         opt.zero_grad()
 
-        with torch.amp.autocast("cuda", enabled=True):
-            x, y_target, lengths, start_mask, end_mask = batch
-            # x = batch["x"]
-            # y_target = batch["y"]
-            y_preds = self.forward(x, lengths=lengths, start_mask=start_mask, end_mask=end_mask)
-            # reduce first 2 dimensions (batch and windows can be merged)
-            #n_labels = len(self.label_encoder.keys())
-            #labels = self.label_encoder.keys()
-            #y_target = y_target.view(-1, n_labels)
-            # (batch * n_windows) - flattened, usefull when slicing target vector at the end
-            #y_preds = y_pred_heads.view(-1, n_labels)
+        autocast = True
+        if self.xlsr:
+            autocast=False
+        
+        with torch.amp.autocast("cuda", enabled=autocast):
+                x, y_target, lengths, mask = batch
+                y_preds = self.forward(x, lengths=lengths, mask=mask)
 
-            loss = torch.nn.functional.cross_entropy(
-                    input=y_preds,
-                    target=y_target
+                loss = torch.nn.functional.cross_entropy(
+                        input=y_preds,
+                        target=y_target
+                    )
+                self.log(
+                    "train/loss", loss, on_step=True, on_epoch=True, prog_bar=False, logger=True
                 )
-            self.log(
-                "train/loss", loss, on_step=True, on_epoch=True, prog_bar=False, logger=True
-            )
         self.scaler.scale(loss)
 
         self.manual_backward(loss)
@@ -220,30 +179,17 @@ class Wav2VecFinetune(pl.LightningModule):
         self.scaler.update()
 
     def validation_step(self, batch, batch_idx):
-        x, y_target, lengths, start_mask, end_mask = batch
-        # x = batch["x"]
-        # y_target = batch["y"]
-        y_preds = self.forward(x, lengths=lengths, start_mask=start_mask, end_mask=end_mask)
+        x, y_target, lengths, mask = batch
+        y_preds = self.forward(x, lengths=lengths, mask=mask)
 
-        # reduce first 2 dimensions (batch and windows can be merged)
         n_labels = len(self.label_encoder.keys())
         labels = self.label_encoder.keys()
-        #y_target = y_target.view(-1, n_labels)
-        # (batch * n_windows) - flattened, usefull when slicing target vector at the end
-        #y_preds = {k: y_pred.view(-1) for k, y_pred in y_pred_heads.items()}
-        #y_preds = y_pred_heads.view(-1, n_labels)
 
         # NOTE - loss computation
         if (
             self.config.train.validation_metric == "loss"
             or "loss" in self.config.train.extra_val_metrics
         ):
-            # head_losses = {
-            #     k: torch.nn.functional.binary_cross_entropy_with_logits(
-            #         input=y_pred, target=y_target[..., i], weight=self.weights
-            #     )
-            #     for i, (k, y_pred) in enumerate(y_preds.items())
-            # }
             loss = torch.nn.functional.cross_entropy(
                     input=y_preds,
                     target=y_target
@@ -262,26 +208,13 @@ class Wav2VecFinetune(pl.LightningModule):
             self.config.train.validation_metric == "f1_score"
             or "f1_score" in self.config.train.extra_val_metrics
         ):
-            # for i,label in enumerate(labels):
-            #     head_f1_i = binary_f1_score(
-            #         preds=y_preds[:, i],
-            #         target=y_target[:, i],
-            #         threshold=0.5,
-            #     )
-            #     self.log(
-            #         f"val/f1_{label}",
-            #         head_f1_i,
-            #         on_step=True,
-            #         on_epoch=True,
-            #         prog_bar=True,
-            #         logger=True,
-            #     )
 
             whole_f1 = f1_score(
                     preds=y_preds,
                     target=y_target,
                     task="multiclass",
-                    num_classes=len(labels)
+                    num_classes=len(labels),
+                    average="macro"
                 )
             self.log(
                     f"val/f1_score",
@@ -345,19 +278,12 @@ class Wav2VecFinetune(pl.LightningModule):
             
 
     def test_step(self, batch, batch_idx, dataloader_idx: int = 0):
-        x, y_target, lengths, start_mask, end_mask = batch
-        # x = batch["x"]
-        # y_target = batch["y"]
-        y_preds = self.forward(x, lengths=lengths, start_mask=start_mask, end_mask=end_mask)
+        x, y_target, lengths, mask = batch
+        y_preds = self.forward(x, lengths=lengths, mask=mask)
 
-        # reduce first 2 dimensions (batch and windows can be merged)
         n_labels = len(self.label_encoder.keys())
         labels = self.label_encoder.keys()
-        #y_target = y_target.view(-1, n_labels)
-        # (batch * n_windows) - flattened, usefull when slicing target vector at the end
-        #y_preds = {k: y_pred.view(-1) for k, y_pred in y_pred_heads.items()}
-        #y_preds = y_pred_heads.view(-1, n_labels)
-        
+
         dataloader_names = {0: "test", 1: "heldout"}
         dataset_name = dataloader_names.get(dataloader_idx, f"dataset_{dataloader_idx}")
         
@@ -438,6 +364,12 @@ class Wav2VecFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
+
+    def predict_step(self, batch, batch_idx, dataloader_idx: int = 0):
+        x, y_target, lengths, mask = batch
+        y_preds = self.forward(x, lengths=lengths, mask=mask)
+        return y_preds
+
 
     def on_test_epoch_end(self):
         if self.config.plots:

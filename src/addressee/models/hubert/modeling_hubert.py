@@ -24,24 +24,6 @@ run_id2model_id = {
 }
 
 
-def segment_mean(self, x, start, end):
-    """
-    x: (B, T, D)
-    start, end: (B,)
-    """
-    B, T, D = x.shape
-
-    start = start.clamp(0, T - 1)
-    end = end.clamp(start + 1, T)
-
-    out = torch.zeros(B, D, device=x.device, dtype=x.dtype)
-
-    for i in range(B):
-        out[i] = x[i, start[i]:end[i]].mean(dim=0)
-
-    return out
-
-
 class HubertFinetune(pl.LightningModule):
     def __init__(
         self,
@@ -371,8 +353,6 @@ class HubertFinetune(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx, dataloader_idx: int = 0):
         x, y_target, lengths, mask = batch
-        # x = batch["x"]
-        # y_target = batch["y"]
         y_preds = self.forward(x, lengths=lengths, mask=mask)
         return y_preds
 

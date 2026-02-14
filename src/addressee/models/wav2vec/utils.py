@@ -12,6 +12,7 @@ W2V2_MODELS = [
     "wav2vec2_large",
     "wav2vec2_xlsr53",
     "wav2vec2_ll4300",
+    "wavlm"
 ]
 
 def load_wav2vec2_model(
@@ -27,7 +28,9 @@ def load_wav2vec2_model(
         case "wav2vec2_large":
             return torchaudio.pipelines.WAV2VEC2_LARGE.get_model()
         case "wav2vec2_xlsr53":
-            return torchaudio.pipelines.WAV2VEC2_XLSR53.get_model()
+            return torchaudio.pipelines.WAV2VEC2_XLSR53.get_model().model
+        case "wavlm":
+            return torchaudio.pipelines.WAVLM_BASE_PLUS.get_model()
         case "wav2vec2_ll4300":
             assert model_checkpoint is not None
             model = wav2vec2_base()
