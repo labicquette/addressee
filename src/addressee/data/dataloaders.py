@@ -112,7 +112,41 @@ class AddresseeDataloader(pl.LightningDataModule):
             if torch.backends.mps.is_available()
             else None,
             )]
-  
+    def predict_dataloader(self) -> DataLoader:
+        validation = AddresseeDataset(self.dataset_path, "addressee", "val", self.config)
+        test = AddresseeDataset(self.dataset_path, "addressee", "test", self.config)
+        heldout = AddresseeDataset(self.dataset_path, "addressee", "heldout", self.config)
+        return [DataLoader(
+            validation,
+            num_workers=self.n_workers,
+            pin_memory=True,
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            batch_size=self.config.train.batch_size*4,
+            multiprocessing_context="fork"
+            if torch.backends.mps.is_available()
+            else None,
+            ),
+            DataLoader(
+            test,
+            num_workers=self.n_workers,
+            pin_memory=True,
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            batch_size=self.config.train.batch_size*4,
+            multiprocessing_context="fork"
+            if torch.backends.mps.is_available()
+            else None,
+            ),
+            DataLoader(
+            heldout,
+            num_workers=self.n_workers,
+            pin_memory=True,
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            batch_size=self.config.train.batch_size*4,
+            multiprocessing_context="fork"
+            if torch.backends.mps.is_available()
+            else None,
+            )]
+
 class AddresseeDataset(Dataset):
     """Create a Dataset for HuBERT model training and fine-tuning.
 
@@ -133,11 +167,7 @@ class AddresseeDataset(Dataset):
         self.config = config
         self.pad = config.train.pad
         self.stride = 320
-        if int(self.config.context_size) > 0:
-            self.static_mask = int(((int(self.config.context_size) * 16000) / 320) - 1) 
-        else:
-            self.static_mask = 0
-            
+
         self.exp_dir = Path(exp_dir)
         self.df = pd.read_csv(self.exp_dir /  (subset+".csv"), low_memory=False)
 
@@ -150,23 +180,44 @@ class AddresseeDataset(Dataset):
         self.f_list, self.wav_onset, self.wav_offset, self.mask_onset, self.mask_offset, self.ind_list = self._get_lists(dataset, subset)
 
 
+        # 1499 = 30s waveform
+        # 0 : mask_onset
+        # 100 : wav_onset
+        # 800 : wav_offset
+        # 1499 : mask_offset
+        # [0:1499]
+        # masking should be :  
+        # [padding_left[context_left[wav_onset:wav_offset]context_right]padding_right]
+        # from indices : 
+        # mask_onset becomes the 0 index
+        # wav_onset index = (wav_onset - mask_onset)/320 - 1
+        # wav_offset index = (wav_offset - mask_onset)/320 - 1
+
+        # utterance_onset = wav_onset (start of the utterance in the original audio file)
+        # utterance_offset = wav_onset (end of the utterance in the original audio file)
+        # context_onset = mask_onset (start of the audio segment feeded to the model) 
+        # context_offset = mask_offset (end of the audio segment feeded to the model) 
+        self.utterance_onset = self.wav_onset
+        self.utterance_offset = self.wav_offset
         
-        self.mask_onset_index = (((self.mask_onset - self.wav_onset) * 16) / self.stride - 1).astype(int) # modify scale
-        self.mask_onset_index = self.mask_onset_index.clip(0) 
-        if self.context_size > 0:
-            self.mask_offset_index = (((self.mask_offset - self.wav_onset) * 16) / self.stride + 1).astype(int)
-            self.mask_offset_index[np.where(self.mask_offset_index > self.static_mask) ] = self.static_mask
-        else:
-            self.mask_offset_index = (((self.wav_offset - self.wav_onset) * 16) / self.stride + 1).astype(int)
-            self.mask_offset_index[np.where(self.mask_offset_index > self.static_mask) ] = self.static_mask
-        #print(self.mask_onset_index, self.mask_offset_index)
+        self.context_onset = self.mask_onset
+        self.context_offset = self.mask_offset
+
+
+        # index of the end of the left context AND start of utterance index
+        self.context_onset_index = (((self.utterance_onset - self.context_onset) * 16) / self.stride - 1).astype(int) # modify scale
+        self.context_onset_index = self.context_onset_index.clip(0) 
+        
+        # index of the start of the right context AND end of utterance index
+        self.context_offset_index = (((self.utterance_offset - self.context_onset) * 16) / self.stride + 1).astype(int)
+        
+
 
         self.f_label = self._load_labels(dataset, subset, config)
         if config.data.classes == "binary_classes":
             self.label_to_id = binary_classes
         if config.data.classes == "ternary_classes":
             self.label_to_id = ternary_classes
-        #_LG.info(f"Finished loading dataset {subset}")
         
 
     def __len__(self):
@@ -189,10 +240,6 @@ class AddresseeDataset(Dataset):
             (numpy.array) List of waveform lengths.
         """
 
-        #self.wav_archive_descriptors = {f:open(f, "rb") for f in self.df["archive_wav"].unique()}
-        # if self.pad:
-        #     onsets, offsets = self.df["segment_onset"].to_numpy(), self.df["segment_offset"].to_numpy() 
-        # else:
         if self.context_size == 0:
             onsets, offsets = self.df["segment_onset"].to_numpy(),self.df["segment_offset"].to_numpy()
         else:
@@ -207,12 +254,6 @@ class AddresseeDataset(Dataset):
         Returns:
             (Tensor): The corresponding waveform Tensor.
         """
-        #print(self.wav_onset[index], self.wav_offset[index])
-        # waveform, _sr = torchaudio.load(
-        #     Path(self.f_list[index]),
-        #     int(self.wav_onset[index]),
-        #     num_frames=480000
-        # )
         waveform, sr = torchaudio.load(
                 uri=Path(self.f_list[index]),
                 frame_offset=int(self.wav_onset[index])*16,
@@ -220,21 +261,6 @@ class AddresseeDataset(Dataset):
                 num_frames=int(self.wav_offset[index]*16 - self.wav_onset[index]*16),
                 backend="soundfile"
                 )
-        # waveform = get_samples_in_range_seconds(
-        #         Path(self.f_list[index]),
-        #         int(self.wav_onset[index])/1000,# onsets are in milliseconds
-        #         480000
-        #         )
-        # except:
-        #     print("problem : ", self.f_list[index], get_audio_info(Path(self.f_list[index])), self.wav_onset[index]/16000, (self.wav_onset[index]/16000) + 30)
-        #     waveform = get_samples_in_range_seconds(
-        #         Path(self.f_list[index]),
-        #         int(self.wav_onset[index])/16000,
-        #         30
-        #         )
-        # #waveform = get_samples_in_range_seconds(, self.wav_onset[index], self.wav_offset[index])
-        #waveform = torch.load(read_from_archive(self.f_list[index], self.wav_bo[index], self.wav_bs[index], self.wav_archive_descriptors[self.wav_archive[index]]))        
-        #assert waveform.shape[1] == 480000 #30 secs
         return waveform.squeeze(0)
 
     def _load_labels(self, dataset: str, subset: str, config) -> np.array:
@@ -247,31 +273,13 @@ class AddresseeDataset(Dataset):
         Returns:
             (np.array): The numpy arrary that contains the labels for each audio file.
         """
-        #_LG.info(f"Loading labels {subset}")
-        #_LG.info(f"Generating descriptors {subset}")
-        #self.label_archive_descriptors = {f:open(f, "rb") for f in self.df["archive_lab"].unique()}
         return self.df[config.data.classes].to_numpy()
-        #return self.df["path_lab"].to_numpy(), self.df["archive_lab"].to_numpy(), self.df["byte_offset_lab"].to_numpy(), self.df["byte_size_lab"].to_numpy()
 
     def __getitem__(self, index):
         waveform = self._load_audio(index)
         length = waveform.shape[0]
-        #length = waveform.shape[1]
-        if self.context_size > 0:
-            start,end = (self.mask_onset_index[index], self.mask_offset_index[index])
-            #print(self.f_label[index],self.f_list[index])
-            #assert self.f_label[index] == self.f_list[index]
-            t = torch.arange(int(length/320)-1)
-            mask = (t >= start) & (t < end)  # (B, T)
-            mask = mask.unsqueeze(-1).float()
-        # else:
-        #     #print(length)
-        #     mask = torch.ones(int(length/320)-1)
-        #inner_onset, inner_offset = self.mask_onset[index], self.mask_offset[index]
         label = self.label_to_id[self.f_label[index]]   
-        #print("length of waveform : ", length)
-        #label = torch.load(read_from_archive(self.f_label[index], self.label_bo[index], self.label_bs[index], self.label_archive_descriptors[self.label_archive[index]]))
-        return (waveform, label, length, self.mask_onset_index[index], self.mask_offset_index[index])
+        return (waveform, label, length, self.context_onset_index[index], self.context_offset_index[index])
 
 
 def _get_padding_mask(input: Tensor, lengths: Tensor) -> Tensor:
@@ -325,28 +333,23 @@ class CollateFnHubert:
                 The Tensor of labels with dimensions `(batch, seq)`.
                 The Tensor of audio lengths with dimension `(batch,)`.
         """
-        if self.pad:
-            num_frames = max([sample[0].shape[0] for sample in batch])
-        else:
-            num_frames = min([sample[0].shape[1] for sample in batch])
+        waveforms, labels, lengths, left_context_end, right_context_start = [], [], [], [], []
+        max_wav_length = 0
 
-        #num_frames taille du crop 
-        # Logger: num_frames, wav_lengths, labels_lengths
-        #_LG.info(f"min_frames : {num_frames} before : {[(b[0].shape, b[1].shape,b[2]) for b in batch]}")
-        waveforms, labels, lengths, start_masks, end_masks = [], [], [], [], []
         for sample in batch:
-            waveform, label, length, start_mask, end_mask = sample
-            
+            waveform, label, length, lce, rcs = sample
+
+            if waveform.shape[0] > max_wav_length:
+                max_wav_length = waveform.shape[0]
+
             waveforms.append(waveform)
             lengths.append(length)
             labels.append(label)
-            start_masks.append(start_mask)
-            end_masks.append(end_mask)
+            left_context_end.append(lce)
+            right_context_start.append(rcs)
 
         # make sure the shapes are the same if not apply zero-padding
         if not self.pad:
-            #_LG.info(f"after : {[(waveforms[i].shape, labels[i].shape,lengths[i]) for i,b in enumerate(batch)]}")
-            #_LG.info(f"labels list : {[(label.shape[0],labels[0].shape[0]) for label in labels]}")
             assert all(
                 [waveform.shape[0] == waveforms[0].shape[0] for waveform in waveforms]
             ), "The dimensions of the waveforms should be identical in the same batch."
@@ -356,22 +359,32 @@ class CollateFnHubert:
 
 
         
-        waveforms = torch.nn.utils.rnn.pad_sequence(waveforms, batch_first=True)
-        
-        
+        masks = []
+        # pad by hand, track left padding only because index based masking, right_context_start <= pad_right_start
+        lengths = np.array(lengths)
+        pad_left = np.floor((max_wav_length - lengths) / 2)
+        pad_right = np.ceil((max_wav_length - lengths) / 2)
+        padded_wavs = []
+        for i,w in enumerate(waveforms):
+            padded_wavs.append(torch.nn.functional.pad(w, (int(pad_left[i]), int(pad_right[i])), "constant",0))
+    
+
+            # make indices of frames for longest waveform in batch
+            t = torch.arange(int((max_wav_length/320))-1)
+
+            # make mask based on :
+            # [0 : left padding + left_context_end] and [left padding + start of right context:] gives mask to compute pooling only on original utterances
+            mask = (t >= int(pad_left[i]/320) + left_context_end[i]) & (t < int(pad_left[i]/320) + right_context_start[i])
+            mask = mask.float().unsqueeze(-1)
+            
+            #case where mask == 0 not possible then mask to 1; if not nans in loss 
+            if sum(mask) == 0:
+                mask = mask +1
+            masks += [mask]
+
+        waveforms = torch.stack(padded_wavs, dim=0)
+        masks = torch.stack(masks, dim=0)
         lengths = torch.tensor(lengths)
-        #hubert_lengths = ((lengths + self.stride - 1) // self.stride)
         labels = torch.tensor(labels)
-        #masks = torch.tensor(masks)
-        start_masks = torch.tensor(start_masks)
-        end_masks = torch.tensor(end_masks)
 
-
-
-        # lengths = conv_length(self.conv_layer_config, lengths)
-        # batch_size, max_len = waveforms.size(0), int(lengths.max())
-        # padding_mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]
-        # attn_mask = ~padding_mask[:, None, None, :].expand(batch_size, 1, max_len, max_len)
-        # mask_indices = self.mask_generator(padding_mask)[0]
-        
-        return waveforms, labels, lengths, start_masks, end_masks #attn_mask, mask_indices #
+        return waveforms, labels, lengths, masks # start_masks, end_masks #attn_mask, mask_indices #

@@ -22,6 +22,9 @@ export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 export NCCL_DEBUG=INFO
 export TORCHDYNAMO_VERBOSE=1
+#export TORCH_HOME="/lustre/fswork/projects/rech/kqg/commun/torch_hub/"
+
+
 
 context_size=0
 run_id="wavlmbasepluswithcontext"$context_size"Sseed"$SLURM_ARRAY_TASK_ID

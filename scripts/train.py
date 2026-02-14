@@ -17,6 +17,11 @@ from lightning.pytorch.loggers import WandbLogger
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+import matplotlib.pyplot as plt
+
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+
+import pandas as pd 
 
 from addressee.utils.logging import get_parameter_table, get_metric
 from addressee.utils.config import load_config, save_config
@@ -26,6 +31,12 @@ from addressee.data.dataloaders import AddresseeDataloader
 import os
 import numpy as np
 import random
+
+
+
+id2label = {0: "ADS",
+                  1: "KCDS",
+                  2: "Other"}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -136,7 +147,7 @@ if __name__ == "__main__":
     # Allow val_change maybe not best idea but needed it for some reason
     # TODO
     logger.experiment.config.update(config, allow_val_change=True)
-    save_path = save_path.with_stem(save_path.stem + f"-{logger.experiment.id}")
+    #save_path = save_path.with_stem(save_path.stem + f"-{logger.experiment.id}")
 
     model_checkpoint = ModelCheckpoint(
         monitor=monitor,
@@ -184,10 +195,9 @@ if __name__ == "__main__":
     else:
         trainer.fit(model, datamodule=dm)
 
-    print(f"[log @ {datetime.now().strftime('%Y%m%d_%H%M')}] - Finished training")
 
     # # NOTE - symlink to best model and to static best model (models/last/best.ckpt)
-    best_link = chkp_path / "best.ckpt"
+    best_link = chkp_path  / "best.ckpt"
 
     # if infer only heldout and test add comment until test
     if best_link.exists() or best_link.is_symlink():
@@ -196,6 +206,7 @@ if __name__ == "__main__":
     best_link.symlink_to(
         Path(model_checkpoint.best_model_path).absolute()
     )
+
     static_p = experiment_path / "last"
     static_p.mkdir(parents=True, exist_ok=True)
     bm_static_p = static_p / "best.ckpt"
@@ -207,8 +218,52 @@ if __name__ == "__main__":
 
 
     print("It's time to test : ")
-    results = trainer.test(model, datamodule=dm, ckpt_path=best_link)
+    #results = trainer.test(model, datamodule=dm, ckpt_path=best_link)
+
+    predictions = trainer.predict(model, datamodule=dm, ckpt_path=best_link)
+    validation, test, heldout = predictions
+
+
+    dfs = []
+
+    for split,str_split in zip(predictions,["val","test","heldout"]):
+        original_pred = split
+
+        split = np.concatenate(split)
+        split = np.argmax(split, axis=1)
+        y_split = pd.read_csv(config.data.dataset_path+"/"+str_split+".csv", low_memory=False)
+        y_split = y_split[y_split["duration(s)"] < 30]
+        y_split = y_split[ y_split["duration(s)"] > 0.04]
+
+        
+        df = y_split
+        y_split = y_split["binary_classes"].to_numpy()
+
+        split = np.array([ id2label[v] for v in split])
+
+
+        df["add_predictions"] = split
+        df.to_csv(save_path / ("results_" + str_split + ".csv"), index=False)
+
+
+        print("y_split : ", y_split)
+        print("split :", split)
+        res = classification_report(y_split, split, output_dict=True)
+        df = pd.DataFrame(res)
+        df["model"] = args.run_id
+        df["split"] = str_split
+        df = df.reset_index()
+        dfs += [df]
+
+
+        cm = confusion_matrix(y_split, split, labels=["ADS", "KCDS", "Other"])
+        ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["ADS", "KCDS", "Other"]).plot()
+        plt.savefig(save_path / ("CM_" + str_split + ".png"))
+
+        plt.close()
 
 
 
-    print(results)
+    bigdf = pd.concat(dfs, ignore_index=True)
+    bigdf.to_csv(save_path / "results.csv", index=False)
+    print(bigdf)

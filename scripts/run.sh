@@ -22,14 +22,15 @@ export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 export NCCL_DEBUG=INFO
 export TORCHDYNAMO_VERBOSE=1
+#export TORCH_HOME="/lustre/fswork/projects/rech/kqg/commun/torch_hub/"
 
-context_size=0
-run_id="bbh1withcontext"$context_size"Sseed"$SLURM_ARRAY_TASK_ID
+context_size=30
+run_id="bbh2contextV2"$context_size"Sseed"$SLURM_ARRAY_TASK_ID
 model_type="hubert"
 #model_id="hubert_base"
 #model_id="hubert_large"
-#model_id="/store/scratch/tcharlot/models/exp_iter3_B175/checkpoints_longforms_hubert_pretrain_base/epoch=44-step=400000.ckpt"
-model_id="/scratch2/tcharlot/models/hubert_iter2_B175/checkpoints_longforms_hubert_pretrain_base/epoch=45-step=400000.ckpt"
+model_id="/store/scratch/tcharlot/models/exp_iter3_B175/checkpoints_longforms_hubert_pretrain_base/epoch=44-step=400000.ckpt"
+#model_id="/scratch2/tcharlot/models/hubert_iter2_B175/checkpoints_longforms_hubert_pretrain_base/epoch=45-step=400000.ckpt"
 
 
 exp_config="pooling.yml"
@@ -48,14 +49,6 @@ if [ ! -f "$user_path/checkpoints/$run_id/run.sh" ] ; then
     echo "created experiment directory and files"
 fi
     
-# #auto_train automatically restarts if there are checkpoints
-# if [ ! -f $user_path/checkpoints/$run_id/"finished" ] ; then
-#     sbatch --dependency=afterany:$SLURM_JOBID $user_path/checkpoints/$run_id/run.sh
-# else
-#     exit 0
-# fi
-
-
 
 srun uv run $addressee_path/scripts/train.py --run-id $run_id --context-size $context_size --output $user_path/checkpoints/ --model-id $model_id --model-type $model_type --exp-config $exp_config --config $user_path/checkpoints/$run_id/config.yml
 
