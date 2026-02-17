@@ -90,8 +90,7 @@ class HubertFinetune(pl.LightningModule):
 
     def forward(self, x: torch.Tensor, lengths, mask):
         x = x.squeeze(1)
-        if not self.config.train.mask_padding_attention: 
-            lengths = None
+        lengths = None
         with torch.no_grad():
             x, lengths = self.wav2vec2.feature_extractor(x, lengths)
         if self.config.freeze_encoder:

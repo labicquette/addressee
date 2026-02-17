@@ -1,11 +1,11 @@
 wandb:
-  offline: false
-  project:  addresseecontext
+  offline: true
+  project:  addresseejzfix
   name: train
 
 data:
 
-  dataset_path: /store/scratch/tcharlot/data/addresseeV2
+  dataset_path: /lustre/fswork/projects/rech/kqg/commun/addressee_dataset
   classes: binary_classes
 
 # necessary info for pred/eval

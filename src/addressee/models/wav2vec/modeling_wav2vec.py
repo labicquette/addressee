@@ -95,8 +95,7 @@ class Wav2VecFinetune(pl.LightningModule):
 
     def forward(self, x: torch.Tensor, lengths, mask):
         x = x.squeeze(1)
-        if not self.padding_attention_mask:
-            lengths = None
+        lengths = None
         # xlsr needs an extra layer norm
         if self.xlsr:
             x = nn.functional.layer_norm(x, x.shape)
