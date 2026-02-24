@@ -33,6 +33,21 @@ ternary_classes = {"ADS":0,
 
 
 
+
+def extend_utterances(df, t):
+    df["fill"] = ((t - df["duration(s)"])/2)*1000
+    #df["filled_offset"]
+    onset_str = "filled_onset_" + str(t)
+    offset_str = "filled_offset_" + str(t)
+    df[onset_str] = df["segment_onset"] - df["fill"]
+    df[offset_str] = df["segment_offset"] + df["fill"]
+    df.loc[df[onset_str] < 0, offset_str] = t * 1000
+    df.loc[df[onset_str] < 0, onset_str] = 0.0
+    df.loc[df[offset_str] > df["recording_duration"], onset_str] = df["recording_duration"] - (t*1000)
+    df.loc[df[offset_str] > df["recording_duration"], offset_str] = df["recording_duration"]
+    
+    return df
+
 class AddresseeDataloader(pl.LightningDataModule):
 
     def __init__(
@@ -65,7 +80,7 @@ class AddresseeDataloader(pl.LightningDataModule):
                 dataset,
                 batch_size=self.config.train.batch_size,
                 drop_last=True,
-                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
                 num_workers=self.n_workers,
                 pin_memory=True,
                 shuffle=True,
@@ -81,7 +96,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             dataset,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size,
             persistent_workers=True,
             multiprocessing_context="fork"
@@ -96,7 +111,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             test,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size,
             multiprocessing_context="fork"
             if torch.backends.mps.is_available()
@@ -106,7 +121,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             heldout,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size,
             multiprocessing_context="fork"
             if torch.backends.mps.is_available()
@@ -120,7 +135,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             validation,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size*4,
             multiprocessing_context="fork"
             if torch.backends.mps.is_available()
@@ -130,7 +145,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             test,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size*4,
             multiprocessing_context="fork"
             if torch.backends.mps.is_available()
@@ -140,7 +155,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             heldout,
             num_workers=self.n_workers,
             pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=int(self.config.context_size) > 0),
+            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
             batch_size=self.config.train.batch_size*4,
             multiprocessing_context="fork"
             if torch.backends.mps.is_available()
@@ -171,14 +186,17 @@ class AddresseeDataset(Dataset):
         self.exp_dir = Path(exp_dir)
         self.df = pd.read_csv(self.exp_dir /  (subset+".csv"), low_memory=False)
 
-        self.context_size = int(self.config.context_size)        
+        self.context_size = float(self.config.context_size)        
         
         self.df = self.df[self.df["duration(s)"] < 30]
         print(len(self.df))
         self.df = self.df[self.df["duration(s)"] > 0.04]
         print("dropped to :", len(self.df))
+
+        self.df = extend_utterances(self.df, self.context_size)
         self.f_list, self.wav_onset, self.wav_offset, self.mask_onset, self.mask_offset, self.ind_list = self._get_lists(dataset, subset)
 
+        
 
         # 1499 = 30s waveform
         # 0 : mask_onset

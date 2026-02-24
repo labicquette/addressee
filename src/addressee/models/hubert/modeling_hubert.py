@@ -86,7 +86,7 @@ class HubertFinetune(pl.LightningModule):
 
         self.preds = {"test":[],"heldout":[]}
         self.targets = {"test":[],"heldout":[]}
-        self.context_size = int(self.config.context_size)
+        self.context_size = float(self.config.context_size)
 
     def forward(self, x: torch.Tensor, lengths, mask):
         x = x.squeeze(1)
