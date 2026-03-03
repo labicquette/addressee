@@ -35,8 +35,8 @@ ternary_classes = {"ADS":0,
 
 
 def extend_utterances(df, t):
-    df["fill"] = ((t - df["duration(s)"])/2)*1000
-    #df["filled_offset"]
+    assert t >= 0
+    df["fill"] = ((t - df["duration(s)"])/2).clip(lower=0)*1000
     onset_str = "filled_onset_" + str(t)
     offset_str = "filled_offset_" + str(t)
     df[onset_str] = df["segment_onset"] - df["fill"]
@@ -193,7 +193,7 @@ class AddresseeDataset(Dataset):
         self.df = self.df[self.df["duration(s)"] > 0.04]
         print("dropped to :", len(self.df))
 
-        self.df = extend_utterances(self.df, self.context_size)
+        self.df = extend_utterances(self.df, self.context_size)    
         self.f_list, self.wav_onset, self.wav_offset, self.mask_onset, self.mask_offset, self.ind_list = self._get_lists(dataset, subset)
 
         
@@ -223,11 +223,11 @@ class AddresseeDataset(Dataset):
 
 
         # index of the end of the left context AND start of utterance index
-        self.context_onset_index = (((self.utterance_onset - self.context_onset) * 16) / self.stride - 1).astype(int) # modify scale
+        self.context_onset_index = (((((self.utterance_onset - self.context_onset) * 16) - 400) // self.stride) - 2).astype(int) # modify scale
         self.context_onset_index = self.context_onset_index.clip(0) 
         
         # index of the start of the right context AND end of utterance index
-        self.context_offset_index = (((self.utterance_offset - self.context_onset) * 16) / self.stride + 1).astype(int)
+        self.context_offset_index = ((((self.utterance_offset - self.context_onset) * 16) - 400) // self.stride ).astype(int)
         
 
 
@@ -388,7 +388,7 @@ class CollateFnHubert:
     
 
             # make indices of frames for longest waveform in batch
-            t = torch.arange(int((max_wav_length/320))-1)
+            t = torch.arange(int( ((max_wav_length - 400) // 320) + 1))#-1)
 
             # make mask based on :
             # [0 : left padding + left_context_end] and [left padding + start of right context:] gives mask to compute pooling only on original utterances
@@ -399,6 +399,8 @@ class CollateFnHubert:
             if sum(mask) == 0:
                 mask = mask +1
             masks += [mask]
+
+            assert ((padded_wavs[-1].shape[0] - 400) // 320 )+1 == mask.shape[0]
 
         waveforms = torch.stack(padded_wavs, dim=0)
         masks = torch.stack(masks, dim=0)
