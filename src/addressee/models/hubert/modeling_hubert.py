@@ -1,18 +1,14 @@
 from typing import Any, Mapping
 import torch
 import torch.nn as nn
-from torchmetrics.functional.classification import binary_f1_score, f1_score, multiclass_recall, multiclass_precision, multiclass_confusion_matrix
+from torchmetrics.functional.classification import f1_score, multiclass_recall, multiclass_precision, multiclass_confusion_matrix
 import lightning as pl
 import pandas as pd 
 import seaborn as sns
-
-from addressee.utils.schedulers import TriStageLRScheduler, build_scheduler
-from addressee.utils.modeling import ConvolutionSettings
+from addressee.utils.schedulers import build_scheduler
 from addressee.utils.config import namespace_to_dict
-from addressee.data.dataloaders import binary_classes,ternary_classes
-import math
-
-from typing import Literal, Optional, Tuple, Iterable
+from addressee.data.dataloaders import binary_classes
+from typing import Literal
 from .utils import load_hubert
 
 
@@ -33,18 +29,23 @@ class HubertFinetune(pl.LightningModule):
         super().__init__()
         self.config = config
         self.label_encoder = binary_classes
-        if train:
-            self.wav2vec2 = load_hubert(self.config.model_id)
-        # else:
-        #     from torchaudio.models import hubert_pretrain_base
-
-        #     model = hubert_pretrain_base(num_classes=500)
-        #     self.wav2vec2 = model.wav2vec2
 
         if self.config.model_id == "hubert_large" :
             feature_size = 1024
         else:
             feature_size = 768
+
+
+        self.dropout = nn.Dropout()
+        self.classifier = nn.Linear(in_features=feature_size, out_features=3)
+        from torchaudio.models import hubert_pretrain_base
+
+        model = hubert_pretrain_base(num_classes=500)
+        self.wav2vec2 = model.wav2vec2
+
+        if train:
+            load_hubert(self)
+            
 
         # NOTE - freeze CNN encoder
         for p in self.wav2vec2.feature_extractor.parameters():
@@ -54,27 +55,6 @@ class HubertFinetune(pl.LightningModule):
         if self.config.freeze_encoder:
             for p in self.wav2vec2.parameters():
                 p.requires_grad = False
-            
-        # reduction mechanism - learnable or non-learnable weights
-        if self.config.reduction == "weighted":
-
-            self.enc_layers_to_use = list(
-                range(len(self.wav2vec2.encoder.transformer.layers))
-            )
-
-            self.layer_weights = nn.Parameter(
-                torch.ones(len(self.enc_layers_to_use)) / len(self.enc_layers_to_use)
-            )
-
-
-        self.dropout = nn.Dropout()
-        self.classifier = nn.Linear(in_features=feature_size, out_features=3)
-
-        self.conv_settings = ConvolutionSettings(
-            kernels=(10, 3, 3, 3, 3, 2, 2),
-            strides=(5, 2, 2, 2, 2, 2, 2),
-            paddings=(0, 0, 0, 0, 0, 0, 0),
-        )
 
         self.automatic_optimization = False
         self.scaler = torch.amp.GradScaler("cuda")
@@ -88,7 +68,7 @@ class HubertFinetune(pl.LightningModule):
         self.targets = {"test":[],"heldout":[]}
         self.context_size = float(self.config.context_size)
 
-    def forward(self, x: torch.Tensor, lengths, mask):
+    def forward(self, x: torch.Tensor, mask):
         x = x.squeeze(1)
         lengths = None
         with torch.no_grad():
@@ -103,42 +83,25 @@ class HubertFinetune(pl.LightningModule):
                 x, lengths, num_layers=None
             )
 
-        # if we want to do layers weighted sum
-        if self.config.reduction:
-            hidden_states = torch.stack(hidden_states, dim=0)
-            layer_weights = self.layer_weights[:, None, None, None]
-            x = torch.sum(layer_weights * hidden_states, dim=0)
-        else:
-            x = hidden_states[-1]
+        x = hidden_states[-1]
 
-        if hasattr(self.config, "pool"):
-            if self.context_size == 0:
-                x = x.mean(dim=1)
-            else:
-                mask_sum =  mask.sum(dim=1)
-                x = (x * mask).sum(dim=1) / mask_sum
+        # x : (B,768)
+        if self.context_size == 0:
+            x = x.mean(dim=1)
+        else:
+            mask_sum =  mask.sum(dim=1)
+            x = (x * mask).sum(dim=1) / mask_sum
                 
-
-
-        else:
-            raise NotImplementedError(
-                f"Transformer layer for dynamic frame sequence is not implemented"
-            )
-            #here transformers logic
-
         # here x should be a single 768 representation
         x = self.dropout(x)
         return self.classifier(x)
 
     def training_step(self, batch, batch_idx):
-
         opt = self.optimizers()
         opt.zero_grad()
-
         with torch.amp.autocast("cuda", enabled=True):
-            x, y_target, lengths, mask = batch
-            y_preds = self.forward(x, lengths=lengths, mask=mask)
-
+            x, y_target, mask = batch
+            y_preds = self.forward(x, mask=mask)
             loss = torch.nn.functional.cross_entropy(
                     input=y_preds,
                     target=y_target
@@ -159,10 +122,8 @@ class HubertFinetune(pl.LightningModule):
         self.scaler.update()
 
     def validation_step(self, batch, batch_idx):
-        x, y_target, lengths, mask = batch
-        y_preds = self.forward(x, lengths=lengths, mask=mask)
-
-        n_labels = len(self.label_encoder.keys())
+        x, y_target, mask = batch
+        y_preds = self.forward(x, mask=mask)
         labels = self.label_encoder.keys()
 
         # NOTE - loss computation
@@ -204,8 +165,6 @@ class HubertFinetune(pl.LightningModule):
                     prog_bar=True,
                     logger=True
                 )
-            
-
             uar_recall = multiclass_recall(
                 preds=y_preds,
                 target=y_target,
@@ -258,10 +217,8 @@ class HubertFinetune(pl.LightningModule):
             
 
     def test_step(self, batch, batch_idx, dataloader_idx: int = 0):
-        x, y_target, lengths, mask = batch
-        y_preds = self.forward(x, lengths=lengths, mask=mask)
-
-        n_labels = len(self.label_encoder.keys())
+        x, y_target, mask = batch
+        y_preds = self.forward(x, mask=mask)
         labels = self.label_encoder.keys()
         
         dataloader_names = {0: "test", 1: "heldout"}
@@ -275,7 +232,6 @@ class HubertFinetune(pl.LightningModule):
             self.config.train.validation_metric == "f1_score"
             or "f1_score" in self.config.train.extra_val_metrics
         ):
-
             whole_f1 = f1_score(
                     preds=y_preds,
                     target=y_target,
@@ -292,8 +248,6 @@ class HubertFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
-            
-
             uar_recall = multiclass_recall(
                 preds=y_preds,
                 target=y_target,
@@ -309,7 +263,6 @@ class HubertFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
-            
             precision = multiclass_precision(
                 preds=y_preds,
                 target=y_target,
@@ -325,8 +278,6 @@ class HubertFinetune(pl.LightningModule):
                     logger=True,
                     add_dataloader_idx=False
                 )
-
-
             classes_f1 = f1_score(
                     preds=y_preds,
                     target=y_target,
@@ -346,17 +297,10 @@ class HubertFinetune(pl.LightningModule):
                     add_dataloader_idx=False
                 )
 
-
-
-
-
     def predict_step(self, batch, batch_idx, dataloader_idx: int = 0):
-        x, y_target, lengths, mask = batch
-        y_preds = self.forward(x, lengths=lengths, mask=mask)
+        x, y_target, mask = batch
+        y_preds = self.forward(x, mask=mask)
         return y_preds
-
-
-
 
     def on_test_epoch_end(self):
         if self.config.plots:
@@ -374,8 +318,8 @@ class HubertFinetune(pl.LightningModule):
                 fig = plot.get_figure()
                 fig.savefig(f"/home/tcharlot/coml/addressee/confusion_matrix_{self.config.run_id}_{split}.png")
                 fig.clf()
-
         return super().on_test_epoch_end()
+    
     def configure_optimizers(self):
         self.optimizer_finetune = torch.optim.AdamW(
             list(self.wav2vec2.parameters()) + list(self.classifier.parameters()),
@@ -383,11 +327,7 @@ class HubertFinetune(pl.LightningModule):
             fused=True
         )
         mode, monitor = get_metric(self.config.train.validation_metric)
-        #self.lr_scheduler_finetune = TriStageLRScheduler(self.optimizer_finetune, warmup_updates=4000,hold_updates=40000, decay_updates=20000)
         self.lr_scheduler_finetune = build_scheduler(self.optimizer_finetune, self.config.train.optim)
-        #self.lr_scheduler_finetune = ReduceLROnPlateau(
-        #        self.optimizer_finetune, mode=mode, patience=self.config.train.scheduler.patience
-        #     )
         return (
             {"optimizer": self.optimizer_finetune,
              "lr_scheduler": {

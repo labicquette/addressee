@@ -75,12 +75,6 @@ class Wav2VecFinetune(pl.LightningModule):
         self.dropout = nn.Dropout()
         self.classifier = nn.Linear(in_features=feature_size, out_features=3)
 
-        self.conv_settings = ConvolutionSettings(
-            kernels=(10, 3, 3, 3, 3, 2, 2),
-            strides=(5, 2, 2, 2, 2, 2, 2),
-            paddings=(0, 0, 0, 0, 0, 0, 0),
-        )
-
         self.automatic_optimization = False
         self.scaler = torch.amp.GradScaler("cuda")
         self.nan_loss_count = 0.0

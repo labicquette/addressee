@@ -9,8 +9,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 import torchaudio
 import math
-#from addressee.utils.io import get_samples_in_range_seconds, get_audio_info
-
 
 binary_classes = {"ADS":0,
                   "KCDS":1,
@@ -21,18 +19,6 @@ ternary_classes = {"ADS":0,
                   "OCDS":2,
                   "Other":3
                   }
-
-
-# taken from spidr https://github.com/facebookresearch/spidr
-# DEFAULT_CONV_LAYER_CONFIG: list[tuple[int, int, int]] = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512, 2, 2)] * 2
-# def conv_length(shapes: list[tuple[int, int, int]], length: Tensor) -> Tensor:
-#     for _, kernel_size, stride in shapes:
-#         length = torch.div(length - kernel_size, stride, rounding_mode="floor") + 1
-#         length = torch.max(torch.zeros_like(length), length)
-#     return length
-
-
-
 
 def extend_utterances(df, t):
     assert t >= 0
@@ -57,16 +43,12 @@ class AddresseeDataloader(pl.LightningDataModule):
         config,
         testing_test="test",
         num_cpus=11
-        #conv_settings: ConvolutionSettings,
-        #audio_preparation_hook: Callable | None = None
     ) -> None:
         super().__init__()
         self.dataset = dataset
         self.dataset_path = dataset_path
         self.config = config
         self.testing_set = testing_test
-        #self.conv_settings = conv_settings
-        #self.audio_preparation_hook = audio_preparation_hook
         self.num_cpus = num_cpus
         if self.num_cpus > 11:
             self.n_workers = 16
@@ -127,6 +109,7 @@ class AddresseeDataloader(pl.LightningDataModule):
             if torch.backends.mps.is_available()
             else None,
             )]
+    
     def predict_dataloader(self) -> DataLoader:
         validation = AddresseeDataset(self.dataset_path, "addressee", "val", self.config)
         test = AddresseeDataset(self.dataset_path, "addressee", "test", self.config)
@@ -298,21 +281,6 @@ class AddresseeDataset(Dataset):
         length = waveform.shape[0]
         label = self.label_to_id[self.f_label[index]]   
         return (waveform, label, length, self.context_onset_index[index], self.context_offset_index[index])
-
-
-def _get_padding_mask(input: Tensor, lengths: Tensor) -> Tensor:
-    """Generate the padding mask given the padded input and the lengths Tensors.
-    Args:
-        input (Tensor): The padded Tensor of dimension `[batch, max_len, frequency]`.
-        lengths (Tensor): The lengths Tensor of dimension `[batch,]`.
-
-    Returns:
-        (Tensor): The padding mask.
-    """
-    batch_size, max_len = input.shape
-    mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]
-    return mask
-
 
 class CollateFnHubert:
     """The collate class for HuBERT pre-training and fine-tuning.

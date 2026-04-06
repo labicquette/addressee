@@ -13,6 +13,7 @@ source = { editable = "." }
 dependencies = [
     { name = "lightning" },
     { name = "pandas" },
+    { name = "pytest" },
     { name = "scikit-learn" },
     { name = "seaborn" },
     { name = "soundfile" },
@@ -32,6 +33,7 @@ dev = [
 requires-dist = [
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pytest", specifier = ">=9.0.2" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "soundfile", specifier = ">=0.13.1" },
