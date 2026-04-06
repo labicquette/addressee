@@ -3,9 +3,12 @@ from types import SimpleNamespace
 
 
 
-def load_yaml(path):
+def load_yaml(path, unsafe=False):
     with open(path) as f:
-        return yaml.safe_load(f)
+        if unsafe:
+            return yaml.unsafe_load(f)
+        else:
+            return yaml.safe_load(f)
 
 
 
@@ -22,7 +25,11 @@ def deep_merge(base: dict, override: dict) -> dict:
     return base
 
 
-def load_config(args, extra_args):
+def load_config(args=None, extra_args=None, train_config=None):
+    if train_config is not None:
+        cfg = load_yaml(train_config, unsafe=True)
+        cfg = to_namespace(cfg)
+        return cfg
     cfg = load_yaml("src/addressee/models/"+args.model_type+"/config.yml")
     if args.exp_config is not None: 
         cfg_exp = load_yaml("src/addressee/config/" + args.exp_config)

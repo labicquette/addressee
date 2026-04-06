@@ -6,29 +6,39 @@ from torch.nn import Module
 from torchaudio.models import hubert_pretrain_base
 
 
-def load_hubert(path: Path | str):
-    path = Path(path)
+def load_hubert(module):
+    path = Path(module.config.model_id)
+    print("loading : ", path)
 
-    print("loading : ",path)
-    model = hubert_pretrain_base(num_classes=500)
     if path.exists():
         print("loaded custom path", path)
-        model = _load_state(model, path)
-
+        state_dict = torch.load(path, map_location="cpu")
+        state_dict = {
+            k.replace("model.", ""): v for k, v in state_dict["state_dict"].items()
+        }
+        # Load directly into the HubertFinetune module (restores wav2vec2 + classifier)
+        module.load_state_dict(state_dict, strict=False)
+        module.wav2vec2 = _init_backbone(module.config.model_id)
+        # Now reload so wav2vec2 weights are also restored
+        module.load_state_dict(state_dict, strict=False)
     else:
-        if "base" in str(path):
-            print("loading HuBERT-base")
-            bundle = torchaudio.pipelines.HUBERT_BASE
-            wav2vec2 = bundle.get_model()
-            model.wav2vec2 = wav2vec2
-        if "large" in str(path):
-            print("loading HuBERT-large")
-            bundle = torchaudio.pipelines.HUBERT_LARGE
-            wav2vec2 = bundle.get_model()
-            model.wav2vec2 = wav2vec2.model
+        module.wav2vec2 = _init_backbone(module.config.model_id)
+
+
+
+def _init_backbone(model_id: str):
+    """Load a pretrained HuBERT backbone from torchaudio."""
+    model = hubert_pretrain_base(num_classes=500)
+    if "base" in model_id:
+        print("loading HuBERT-base")
+        bundle = torchaudio.pipelines.HUBERT_BASE
+        model.wav2vec2 = bundle.get_model()
+    elif "large" in model_id:
+        print("loading HuBERT-large")
+        bundle = torchaudio.pipelines.HUBERT_LARGE
+        model.wav2vec2 = bundle.get_model()
     model.wav2vec2.train()
     return model.wav2vec2
-
 
 def _load_state(model: Module, checkpoint_path: Path, device="cpu") -> Module:
     """Load weights from HuBERTPretrainModel checkpoint into hubert_pretrain_base model.
