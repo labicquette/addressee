@@ -1,6 +1,3 @@
-[submodule "addressee"]
-	path = addressee
-	url = https://huggingface.co/coml/addressee
 [submodule "model"]
 	path = model
 	url = https://huggingface.co/coml/addressee
