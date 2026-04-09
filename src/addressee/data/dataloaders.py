@@ -1,14 +1,14 @@
 from pathlib import Path
-from typing import Callable, List, Tuple, Union
+from typing import List, Tuple, Union
 
 from torch import Tensor
 import lightning as pl
 import numpy as np
 import pandas as pd
+from pandas import DataFrame
 import torch
 from torch.utils.data import DataLoader, Dataset
 import torchaudio
-import math
 
 binary_classes = {"ADS":0,
                   "KCDS":1,
@@ -41,15 +41,17 @@ class AddresseeDataloader(pl.LightningDataModule):
         dataset: str,
         dataset_path: Path,
         config,
-        testing_test="test",
+        inference=False,
+        optional_df = DataFrame | None,
         num_cpus=11
     ) -> None:
         super().__init__()
         self.dataset = dataset
         self.dataset_path = dataset_path
         self.config = config
-        self.testing_set = testing_test
+        self.inference = inference
         self.num_cpus = num_cpus
+        self.df = optional_df
         if self.num_cpus > 11:
             self.n_workers = 16
         else:
@@ -109,49 +111,73 @@ class AddresseeDataloader(pl.LightningDataModule):
             if torch.backends.mps.is_available()
             else None,
             )]
-    
+        
     def predict_dataloader(self) -> DataLoader:
-        validation = AddresseeDataset(self.dataset_path, "addressee", "val", self.config)
-        test = AddresseeDataset(self.dataset_path, "addressee", "test", self.config)
-        heldout = AddresseeDataset(self.dataset_path, "addressee", "heldout", self.config)
-        return [DataLoader(
-            validation,
-            num_workers=self.n_workers,
-            pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
-            batch_size=self.config.train.batch_size*4,
-            multiprocessing_context="fork"
-            if torch.backends.mps.is_available()
-            else None,
-            ),
-            DataLoader(
-            test,
-            num_workers=self.n_workers,
-            pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
-            batch_size=self.config.train.batch_size*4,
-            multiprocessing_context="fork"
-            if torch.backends.mps.is_available()
-            else None,
-            ),
-            DataLoader(
-            heldout,
-            num_workers=self.n_workers,
-            pin_memory=True,
-            collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
-            batch_size=self.config.train.batch_size*4,
-            multiprocessing_context="fork"
-            if torch.backends.mps.is_available()
-            else None,
-            )]
+        if self.inference:
+            inference = AddresseeDataset(self.dataset_path, "addressee", "val", self.config, df=self.df)
+            return DataLoader(
+                inference,
+                num_workers=self.n_workers,
+                pin_memory=True,
+                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
+                batch_size=self.config.train.batch_size,
+                multiprocessing_context="fork"
+                if torch.backends.mps.is_available()
+                else None,
+                )
+        else:
+            validation = AddresseeDataset(self.dataset_path, "addressee", "val", self.config)
+            test = AddresseeDataset(self.dataset_path, "addressee", "test", self.config)
+            heldout = AddresseeDataset(self.dataset_path, "addressee", "heldout", self.config)
+            return [DataLoader(
+                validation,
+                num_workers=self.n_workers,
+                pin_memory=True,
+                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
+                batch_size=self.config.train.batch_size*4,
+                multiprocessing_context="fork"
+                if torch.backends.mps.is_available()
+                else None,
+                ),
+                DataLoader(
+                test,
+                num_workers=self.n_workers,
+                pin_memory=True,
+                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
+                batch_size=self.config.train.batch_size*4,
+                multiprocessing_context="fork"
+                if torch.backends.mps.is_available()
+                else None,
+                ),
+                DataLoader(
+                heldout,
+                num_workers=self.n_workers,
+                pin_memory=True,
+                collate_fn=CollateFnHubert(pad=True, rand_crop=False, additional_context=float(self.config.context_size) > 0),
+                batch_size=self.config.train.batch_size*4,
+                multiprocessing_context="fork"
+                if torch.backends.mps.is_available()
+                else None,
+                )]
 
 class AddresseeDataset(Dataset):
-    """Create a Dataset for HuBERT model training and fine-tuning.
+    """PyTorch Dataset for addressee detection model training and fine-tuning.
+
+    Loads audio segments from CSV manifests, optionally extending them with
+    surrounding context, and computes frame-level mask indices that indicate
+    the span of the original utterance within the (possibly padded) context
+    window fed to the model.
 
     Args:
-        exp_dir (str or Path): The root directory of the ``.tsv`` file list.
-        dataset (str): The dataset for training. Options: [``librispeech``, ``librilight``].
-        subset (str): The subset of the dataset. Options: [``train``, ``valid``].
+        exp_dir (str or Path): Root directory containing the CSV split files
+            (e.g. ``train.csv``, ``val.csv``, ``test.csv``).
+        dataset (str): Dataset identifier (e.g. ``"addressee"``). Passed
+            through to label-loading helpers.
+        subset (str): Which split to load. Options: ``"train"``, ``"val"``,
+            ``"test"``, ``"heldout"``.
+        config: Experiment configuration object. Expected attributes include
+            ``config.train.pad``, ``config.context_size``,
+            ``config.data.classes``.
     """
 
     def __init__(
@@ -159,59 +185,58 @@ class AddresseeDataset(Dataset):
         exp_dir: Union[str, Path],
         dataset: str,
         subset: str,
-        config
+        config,
+        df = None,
     ) -> None:
         
         self.config = config
         self.pad = config.train.pad
         self.stride = 320
-
+        self.context_size = float(self.config.context_size)   
         self.exp_dir = Path(exp_dir)
-        self.df = pd.read_csv(self.exp_dir /  (subset+".csv"), low_memory=False)
 
-        self.context_size = float(self.config.context_size)        
-        
-        self.df = self.df[self.df["duration(s)"] < 30]
-        print(len(self.df))
-        self.df = self.df[self.df["duration(s)"] > 0.04]
-        print("dropped to :", len(self.df))
+        if df is not None:
+            self.df = df
+        else:
+            self.df = pd.read_csv(self.exp_dir /  (subset+".csv"), low_memory=False)
+            self.df = self.df[self.df["duration(s)"] < 30]
+            print(len(self.df))
+            self.df = self.df[self.df["duration(s)"] > 0.04]
+            print("dropped to :", len(self.df))
 
         self.df = extend_utterances(self.df, self.context_size)    
         self.f_list, self.wav_onset, self.wav_offset, self.mask_onset, self.mask_offset, self.ind_list = self._get_lists(dataset, subset)
 
         
 
-        # 1499 = 30s waveform
-        # 0 : mask_onset
-        # 100 : wav_onset
-        # 800 : wav_offset
-        # 1499 : mask_offset
-        # [0:1499]
-        # masking should be :  
-        # [padding_left[context_left[wav_onset:wav_offset]context_right]padding_right]
-        # from indices : 
-        # mask_onset becomes the 0 index
-        # wav_onset index = (wav_onset - mask_onset)/320 - 1
-        # wav_offset index = (wav_offset - mask_onset)/320 - 1
+        # Frame index layout for a context window fed to the model:
+        #
+        #   [padding_left | context_left | utterance | context_right | padding_right]
+        #
+        # Terminology:
+        #   utterance_onset  / utterance_offset  – start/end of the utterance in
+        #                                          the original audio file (ms)
+        #   context_onset    / context_offset    – start/end of the audio segment
+        #                                          actually fed to the model (ms)
+        #
+        # Frame index conversion (HuBERT stride = 320 samples @ 16 kHz):
+        #   frame_index = ((sample_offset - 400) // stride)
+        #
+        #   context_onset_index  – last frame of the left context / first frame
+        #                          of the utterance, clipped to 0
+        #   context_offset_index – first frame of the right context / last frame
+        #                          of the utterance
 
-        # utterance_onset = wav_onset (start of the utterance in the original audio file)
-        # utterance_offset = wav_onset (end of the utterance in the original audio file)
-        # context_onset = mask_onset (start of the audio segment feeded to the model) 
-        # context_offset = mask_offset (end of the audio segment feeded to the model) 
         self.utterance_onset = self.wav_onset
         self.utterance_offset = self.wav_offset
         
         self.context_onset = self.mask_onset
         self.context_offset = self.mask_offset
 
-
-        # index of the end of the left context AND start of utterance index
-        self.context_onset_index = (((((self.utterance_onset - self.context_onset) * 16) - 400) // self.stride) - 2).astype(int) # modify scale
+        self.context_onset_index = (((((self.utterance_onset - self.context_onset) * 16) - 400) // self.stride) - 2).astype(int)
         self.context_onset_index = self.context_onset_index.clip(0) 
         
-        # index of the start of the right context AND end of utterance index
         self.context_offset_index = ((((self.utterance_offset - self.context_onset) * 16) - 400) // self.stride ).astype(int)
-        
 
 
         self.f_label = self._load_labels(dataset, subset, config)
@@ -228,17 +253,28 @@ class AddresseeDataset(Dataset):
         self,
         dataset: str,
         subset: str,
-    ) -> Tuple[List[Path], List[int], List[int]]:
-        """Get the list of paths for iteration.
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Build array-based index structures from the loaded DataFrame.
+
+        When ``context_size`` is 0 the raw segment onsets/offsets are used as
+        the audio window boundaries; otherwise the pre-computed
+        ``filled_onset_<t>`` / ``filled_offset_<t>`` columns are used.
+
         Args:
-            tsv_dir (Path): The root directory of the ``.tsv`` file list.
-            dataset (str): The dataset for training. Options: [``librispeech``, ``librilight``].
-            subset (str): The subset of the dataset. Options: [``train``, ``valid``].
+            dataset (str): Dataset identifier (unused directly, kept for
+                interface consistency).
+            subset (str): Split name (unused directly, kept for interface
+                consistency).
 
         Returns:
-            (numpy.array) List of file paths.
-            (numpy.array) List of indices.
-            (numpy.array) List of waveform lengths.
+            f_list (np.ndarray): File paths for each sample.
+            wav_onset (np.ndarray): Start of the audio window to load (ms).
+            wav_offset (np.ndarray): End of the audio window to load (ms).
+            mask_onset (np.ndarray): Start of the original utterance within
+                the audio file (ms).
+            mask_offset (np.ndarray): End of the original utterance within
+                the audio file (ms).
+            ind_list (np.ndarray): Sequential integer index for each sample.
         """
 
         if self.context_size == 0:
@@ -248,31 +284,38 @@ class AddresseeDataset(Dataset):
         return self.df["file_path"].to_numpy(), onsets, offsets, self.df["segment_onset"].to_numpy(),self.df["segment_offset"].to_numpy(), np.asarray(list(range(len(self.df["file_path"]))))
 
     def _load_audio(self, index: int) -> Tensor:
-        """Load waveform given the sample index of the dataset.
+        """Load the waveform for a given sample index.
+
+        Reads only the relevant slice of the audio file defined by
+        ``wav_onset`` and ``wav_offset`` (converted from milliseconds to
+        samples at 16 kHz).
+
         Args:
-            index (int): The sample index.
+            index (int): The sample index into the dataset.
 
         Returns:
-            (Tensor): The corresponding waveform Tensor.
+            Tensor: 1-D waveform tensor of shape ``(num_samples,)``.
         """
         waveform, sr = torchaudio.load(
                 uri=Path(self.f_list[index]),
                 frame_offset=int(self.wav_onset[index])*16,
-                #check if its ms or frames for segment_onset vs filled_onset
-                num_frames=int(self.wav_offset[index]*16 - self.wav_onset[index]*16),
-                backend="soundfile"
+                num_frames=int(self.wav_offset[index]*16 - self.wav_onset[index]*16)
                 )
         return waveform.squeeze(0)
 
-    def _load_labels(self, dataset: str, subset: str, config) -> np.array:
-        """Load all labels to memory into a numpy array.
+    def _load_labels(self, dataset: str, subset: str, config) -> np.ndarray:
+        """Load all class labels into a numpy array.
+
         Args:
-            label_dir (Path): The directory that contains the label file.
-            dataset (str): The dataset for training. Options: [``librispeech``, ``librilight``].
-            subset (str): The subset of the dataset. Options: [``train``, ``valid``].
+            dataset (str): Dataset identifier (unused directly, kept for
+                interface consistency).
+            subset (str): Split name (unused directly, kept for interface
+                consistency).
+            config: Experiment configuration object. ``config.data.classes``
+                selects which column of the DataFrame contains the labels.
 
         Returns:
-            (np.array): The numpy arrary that contains the labels for each audio file.
+            np.ndarray: String label array aligned with the DataFrame rows.
         """
         return self.df[config.data.classes].to_numpy()
 
@@ -283,17 +326,24 @@ class AddresseeDataset(Dataset):
         return (waveform, label, length, self.context_onset_index[index], self.context_offset_index[index])
 
 class CollateFnHubert:
-    """The collate class for HuBERT pre-training and fine-tuning.
+    """Collate function for HuBERT-based addressee detection batches.
+
+    Center-pads all waveforms in a mini-batch to the length of the longest
+    sample, then builds a per-sample binary frame mask that marks only the
+    frames belonging to the original utterance (excluding left/right context
+    padding). The mask is used downstream to pool only over the utterance
+    frames when computing the classification loss.
+
     Args:
-        feature_type (str): The type of features for KMeans clustering.
-            Options: [``mfcc``, ``hubert``].
-        pad (bool): If ``True``, the waveforms and labels will be padded to the
-            max length in the mini-batch. If ``pad`` is False, the waveforms
-            and labels will be cropped to the minimum length in the mini-batch.
-            (Default: False)
-        rand_crop (bool): if ``True``, the starting index of the waveform
-            and label is random if the length is longer than the minimum
-            length in the mini-batch.
+        pad (bool): If ``True``, waveforms are zero-padded to the maximum
+            length in the batch. Must be ``True``; the unpadded path is not
+            fully implemented. (Default: ``False``)
+        rand_crop (bool): If ``True``, the starting index is chosen randomly
+            when cropping to a minimum length. Currently unused. (Default: ``True``)
+        additional_context (bool): Whether the samples include surrounding
+            context beyond the raw utterance boundaries. When ``True``, the
+            mask indices delimit the utterance within the wider context window.
+            (Default: ``False``)
     """
 
     def __init__(
@@ -307,17 +357,25 @@ class CollateFnHubert:
         self.rand_crop = rand_crop
         self.stride = 320
 
-    def __call__(self, batch: List[Tuple[Tensor, Tensor, int]]) -> Tuple[Tensor, Tensor, Tensor]:
-        """
+    def __call__(self, batch: List[Tuple[Tensor, int, int, int, int]]) -> Tuple[Tensor, Tensor, Tensor]:
+        """Collate a list of dataset samples into a padded batch.
+
         Args:
-            batch (List[Tuple(Tensor, Tensor, int)]):
-                The list of tuples that contains the waveforms, labels, and audio lengths.
+            batch: List of tuples ``(waveform, label, length,
+                left_context_end, right_context_start)`` as returned by
+                ``AddresseeDataset.__getitem__``.
 
         Returns:
-            (Tuple(Tensor, Tensor, Tensor)):
-                The Tensor of waveforms with dimensions `(batch, time)`.
-                The Tensor of labels with dimensions `(batch, seq)`.
-                The Tensor of audio lengths with dimension `(batch,)`.
+            waveforms (Tensor): Center-padded waveforms of shape
+                ``(batch, time)``.
+            labels (Tensor): Class indices of shape ``(batch,)``.
+            lengths (Tensor): Original (unpadded) waveform lengths of shape
+                ``(batch,)``.
+            masks (Tensor): Binary utterance masks of shape
+                ``(batch, num_frames, 1)``, where 1 indicates frames that
+                belong to the utterance and 0 indicates context or padding
+                frames. If all frames would be masked out for a sample the
+                mask is set to all-ones to avoid NaN losses.
         """
         waveforms, labels, lengths, left_context_end, right_context_start = [], [], [], [], []
         max_wav_length = 0
@@ -346,7 +404,9 @@ class CollateFnHubert:
 
         
         masks = []
-        # pad by hand, track left padding only because index based masking, right_context_start <= pad_right_start
+        # Center-pad each waveform and compute utterance frame masks.
+        # Only left-pad size is needed for index adjustment since the right
+        # context boundary is guaranteed to fall before the right padding.
         lengths = np.array(lengths)
         pad_left = np.floor((max_wav_length - lengths) / 2)
         pad_right = np.ceil((max_wav_length - lengths) / 2)
@@ -354,16 +414,15 @@ class CollateFnHubert:
         for i,w in enumerate(waveforms):
             padded_wavs.append(torch.nn.functional.pad(w, (int(pad_left[i]), int(pad_right[i])), "constant",0))
     
+            # Frame indices for the longest waveform in the batch
+            t = torch.arange(int( ((max_wav_length - 400) // 320) + 1))
 
-            # make indices of frames for longest waveform in batch
-            t = torch.arange(int( ((max_wav_length - 400) // 320) + 1))#-1)
-
-            # make mask based on :
-            # [0 : left padding + left_context_end] and [left padding + start of right context:] gives mask to compute pooling only on original utterances
+            # Mask is 1 for frames inside [left_context_end, right_context_start)
+            # after accounting for the left zero-padding offset.
             mask = (t >= int(pad_left[i]/320) + left_context_end[i]) & (t < int(pad_left[i]/320) + right_context_start[i])
             mask = mask.float().unsqueeze(-1)
             
-            #case where mask == 0 not possible then mask to 1; if not nans in loss 
+            # Guard against an all-zero mask to prevent NaN in the loss
             if sum(mask) == 0:
                 mask = mask +1
             masks += [mask]
@@ -372,7 +431,6 @@ class CollateFnHubert:
 
         waveforms = torch.stack(padded_wavs, dim=0)
         masks = torch.stack(masks, dim=0)
-        lengths = torch.tensor(lengths)
         labels = torch.tensor(labels)
 
-        return waveforms, labels, lengths, masks # start_masks, end_masks #attn_mask, mask_indices #
+        return waveforms, labels, masks # start_masks, end_masks #attn_mask, mask_indices #
