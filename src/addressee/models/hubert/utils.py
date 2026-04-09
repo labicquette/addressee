@@ -8,10 +8,8 @@ from torchaudio.models import hubert_pretrain_base
 
 def load_hubert(module):
     path = Path(module.config.model_id)
-    print("loading : ", path)
 
     if path.exists():
-        print("loaded custom path", path)
         state_dict = torch.load(path, map_location="cpu")
         state_dict = {
             k.replace("model.", ""): v for k, v in state_dict["state_dict"].items()
